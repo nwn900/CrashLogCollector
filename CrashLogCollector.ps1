@@ -1,22 +1,39 @@
-# --- PowerShell Crash Log Collector for Skyrim SE (30 Minute Window) ---
+# --- PowerShell Crash Log Collector for Skyrim SE (Low Privileges) ---
 
-#region Function to Create Folder Browser Dialog
+#region Function to Create Folder Browser Dialog (Modern Explorer Style)
 function Show-FolderBrowserDialog {
     param (
         [string]$Description = "Select a folder",
         [string]$InitialDirectory
     )
 
+    # We load only the necessary .NET assembly. 
+    # This runs in standard user mode without requiring C# compilation permissions.
     Add-Type -AssemblyName System.Windows.Forms
-    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-    $folderBrowser.Description = $Description
-    if ($InitialDirectory) {
-        $folderBrowser.SelectedPath = $InitialDirectory
+    
+    $fileBrowser = New-Object System.Windows.Forms.OpenFileDialog
+    
+    # Configure the dialog to look like a standard Explorer window
+    $fileBrowser.Title = $Description
+    if ($InitialDirectory -and (Test-Path $InitialDirectory)) {
+        $fileBrowser.InitialDirectory = $InitialDirectory
     }
 
-    $result = $folderBrowser.ShowDialog((New-Object System.Windows.Forms.Form -Property @{TopMost = $true }))
+    # Configuration to enable "Folder Picking" via the OpenFile interface
+    # This trick enables the Address Bar functionality
+    $fileBrowser.ValidateNames = $false    # Allows "Folder Selection" as a name
+    $fileBrowser.CheckFileExists = $false  # Don't check for an actual file
+    $fileBrowser.CheckPathExists = $true   # Do ensure the folder exists
+    $fileBrowser.FileName = "Folder Selection" # Dummy filename to allow the "Open" button to work
+    $fileBrowser.Filter = "Folders|`n"         # Visual filter to hide clutter
+    
+    # ShowDialog is called without an owner window to prevent permission escalation 
+    # or window handle manipulation requirements.
+    $result = $fileBrowser.ShowDialog()
+
     if ($result -eq "OK") {
-        return $folderBrowser.SelectedPath
+        # The dialog returns "Path\Folder Selection". We strip the dummy filename.
+        return [System.IO.Path]::GetDirectoryName($fileBrowser.FileName)
     }
     return $null
 }
@@ -26,15 +43,22 @@ try {
     $scriptPath = $PSScriptRoot
     
     # --- 1. Get Skyrim Logs (30-Minute Window) ---
-    $defaultLogPath = [System.Environment]::GetFolderPath('MyDocuments') + "\My Games\Skyrim Special Edition\SKSE"
+    # Construct path safely using Environment variable to ensure it works on any user account
+    $docsPath = [System.Environment]::GetFolderPath('MyDocuments')
+    $defaultLogPath = Join-Path $docsPath "My Games\Skyrim Special Edition\SKSE"
     
     Write-Host "Opening folder selection for Skyrim logs..."
-    $logFolderPath = Show-FolderBrowserDialog -Description "Select the folder containing your Skyrim logs (e.g., ...\SKSE)" -InitialDirectory $defaultLogPath
+    
+    # Dialog 1
+    $logFolderPath = Show-FolderBrowserDialog -Description "Navigate to SKSE Logs -> Click 'Open'" -InitialDirectory $defaultLogPath
     
     if (-not $logFolderPath) {
         throw "Log folder selection was canceled. Halting script."
     }
 
+    Write-Host "Selected Log Path: $logFolderPath"
+
+    # Get files with Read-Only intent
     $allLogFiles = Get-ChildItem -Path $logFolderPath -Filter "*.log" | Sort-Object LastWriteTime -Descending
     
     if ($allLogFiles.Count -eq 0) {
@@ -42,8 +66,6 @@ try {
         $logFilesToProcess = @()
     } else {
         $newestLogTime = $allLogFiles[0].LastWriteTime
-        
-        # CHANGED: Now looks back 30 minutes from the newest log
         $cutoffTime = $newestLogTime.AddMinutes(-30)
         
         $logFilesToProcess = $allLogFiles | Where-Object { $_.LastWriteTime -ge $cutoffTime }
@@ -51,23 +73,29 @@ try {
     }
 
     $logsOutputFile = Join-Path -Path $scriptPath -ChildPath "LOGS.txt"
-    if (Test-Path $logsOutputFile) { Clear-Content $logsOutputFile }
+    if (Test-Path $logsOutputFile) { Clear-Content $logsOutputFile -ErrorAction SilentlyContinue }
 
+    # Process logs
     foreach ($logFile in $logFilesToProcess) {
         Add-Content -Path $logsOutputFile -Value "--- Log File: $($logFile.Name) [$($logFile.LastWriteTime)] ---`r`n"
-        Get-Content -Path $logFile.FullName | Add-Content -Path $logsOutputFile
+        # Stream content to avoid memory spikes on large files
+        Get-Content -Path $logFile.FullName -ReadCount 0 | Add-Content -Path $logsOutputFile
         Add-Content -Path $logsOutputFile -Value "`r`n"
     }
 
     # --- 2. Get MO2 Profile Files ---
     Write-Host "Opening folder selection for your MO2 profile..."
-    $mo2ProfilePath = Show-FolderBrowserDialog -Description "Select your current MO2 profile folder"
+    
+    # Dialog 2
+    $mo2ProfilePath = Show-FolderBrowserDialog -Description "Navigate to MO2 Profile -> Click 'Open'"
     
     if (-not $mo2ProfilePath) {
         throw "MO2 profile folder selection was canceled. Halting script."
     }
 
-    # Reliable file grabbing using Where-Object
+    Write-Host "Selected MO2 Path: $mo2ProfilePath"
+
+    # Get files (Read-Only)
     $mo2FilesToProcess = Get-ChildItem -Path $mo2ProfilePath -File | Where-Object { $_.Extension -match '\.(txt|ini)$' }
     
     $mo2OutputFile = Join-Path -Path $scriptPath -ChildPath "MO2 PROFILE.txt"
@@ -79,7 +107,7 @@ try {
     } else {
         foreach ($file in $mo2FilesToProcess) {
             Add-Content -Path $mo2OutputFile -Value "--- Profile File: $($file.Name) ---`r`n"
-            Get-Content -Path $file.FullName | Add-Content -Path $mo2OutputFile
+            Get-Content -Path $file.FullName -ReadCount 0 | Add-Content -Path $mo2OutputFile
             Add-Content -Path $mo2OutputFile -Value "`r`n"
         }
     }
