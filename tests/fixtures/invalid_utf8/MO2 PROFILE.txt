@@ -1,0 +1,3 @@
+--- Profile File: invalid.txt ---
+modlist=��Skyrim
+

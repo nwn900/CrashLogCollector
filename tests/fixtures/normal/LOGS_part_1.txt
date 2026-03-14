@@ -1,0 +1,7 @@
+
+--- Log File: crash_002.log [{{NEWEST_TS}}] ---
+newest line one
+newest line two
+
+--- Log File: crash_001.log [{{WITHIN_TS}}] ---
+older session line

@@ -1,0 +1,4 @@
+--- Profile File: profile.ini ---
+[General]
+sLanguage=ENGLISH
+
